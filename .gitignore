@@ -1,3 +1,12 @@
+/build
+/eclipse
+/SimplyBackup.iws
+/SimplyBackup.iml
+/.idea
+/.gradle
+/SimplyBackup.ipr
+/gradle
+
 *.class
 
 # Mobile Tools for Java (J2ME)

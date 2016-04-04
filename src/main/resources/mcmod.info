@@ -1,0 +1,16 @@
+[
+{
+  "modid": "simplybackup",
+  "name": "Simply Backup",
+  "description": "A simple mod for backing up world data",
+  "version": "${version}",
+  "mcversion": "${mcversion}",
+  "url": "",
+  "updateUrl": "",
+  "authorList": ["Sima214"],
+  "credits": "",
+  "logoFile": "",
+  "screenshots": [],
+  "dependencies": []
+}
+]
