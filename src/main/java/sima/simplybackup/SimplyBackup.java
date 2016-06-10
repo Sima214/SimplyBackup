@@ -12,6 +12,8 @@ import net.minecraft.command.ICommandSender;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.management.ServerConfigurationManager;
 import net.minecraft.util.ChatComponentText;
+import net.minecraft.world.MinecraftException;
+import net.minecraft.world.WorldServer;
 import net.minecraftforge.common.DimensionManager;
 import net.minecraftforge.common.config.Configuration;
 import org.apache.logging.log4j.Level;
@@ -20,6 +22,7 @@ import org.apache.logging.log4j.Logger;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.locks.LockSupport;
@@ -70,9 +73,9 @@ public class SimplyBackup {
         procBuilder.redirectErrorStream(true);//Potential Improvement : Handle log output from the process in a better way.
         procBuilder.redirectOutput(ProcessBuilder.Redirect.INHERIT);
         if (outputDir.isDirectory()) {
-            log(Level.INFO, "Backup directory seems okay.");
+            log(Level.DEBUG, "Backup directory seems okay.");
         } else if (outputDir.mkdirs()) {
-            log(Level.INFO, "Created backup directory.");
+            log(Level.DEBUG, "Created backup directory.");
         } else throw new RuntimeException("Could not create backup output directory.");
     }
 
@@ -118,9 +121,6 @@ public class SimplyBackup {
         nextSchedule = getTicks() + autoTicks;
     }
 
-    protected void log(Level l, Object o) {
-        log(l, o.toString());
-    }
 
     private Level CHAT_THRESHOLD = Level.INFO;
 
@@ -137,16 +137,46 @@ public class SimplyBackup {
         }
     }
 
-    protected void saveOff() {
-        log(Level.INFO, "Turning autosave off.");
-    }
+    private BitSet state = new BitSet();
 
-    protected void saveAll() {
-        log(Level.INFO, "Saving data to disk.");
+    protected void saveOffAndAll() {
+        log(Level.INFO, "Saving to disk.");
+        state.clear();
+        MinecraftServer server = MinecraftServer.getServer();
+        if (server.getConfigurationManager() != null) {
+            server.getConfigurationManager().saveAllPlayerData();
+        }
+        WorldServer[] worldServers = server.worldServers;
+        for (int i = 0; i < worldServers.length; i++) {
+            WorldServer cur = worldServers[i];
+            if (cur != null) {
+                //Set save off
+                if (cur.levelSaving) {
+                    state.set(i);
+                } else {
+                    cur.levelSaving = true;
+                }
+                //Actually save
+                try {
+                    cur.saveAllChunks(true, null);
+                    cur.saveChunkData();
+                } catch (MinecraftException e) {
+                    log(Level.ERROR, "Error occurred while saving chunks. Continuing...");
+                    e.printStackTrace();
+                }
+
+            }
+        }
     }
 
     protected void saveReset() {
-        log(Level.INFO, "Reseting autosave state.");
+        log(Level.DEBUG, "Resetting state.");
+        MinecraftServer server = MinecraftServer.getServer();
+        WorldServer[] worldServers = server.worldServers;
+        for (int i = 0; i < worldServers.length; i++) {
+            WorldServer cur = worldServers[i];
+            cur.levelSaving = state.get(i);
+        }
     }
 
     class BackupCommand extends CommandBase {
@@ -172,6 +202,7 @@ public class SimplyBackup {
                 thread.triggerBackup(BackupTriggers.MANUAL);
             } else {
                 log(Level.INFO, (nextSchedule - getTicks()) + " ticks or " + ((nextSchedule - getTicks()) / 1200) + " minutes remaining until next scheduled backup.");
+                log(Level.INFO, "Use /backup start to start a new manual backup.");
             }
         }
     }
@@ -188,13 +219,12 @@ public class SimplyBackup {
 
         protected void triggerBackup(BackupTriggers trig) {
             if (task != null) {
-                log(Level.INFO, "Cannot have more than one backup running at once!");
+                log(Level.ERROR, "Cannot have more than one backup running at once!");
                 return;
             }
             //No need to save if the server is shutting down.
             if (trig != BackupTriggers.ONEXIT) {
-                saveOff();
-                saveAll();
+                saveOffAndAll();
             }
             task = trig;
             resetTimers();
