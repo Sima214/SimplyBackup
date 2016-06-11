@@ -2,6 +2,7 @@ package sima.simplybackup;
 
 import cpw.mods.fml.common.FMLCommonHandler;
 import cpw.mods.fml.common.Mod;
+import cpw.mods.fml.common.event.FMLPostInitializationEvent;
 import cpw.mods.fml.common.event.FMLPreInitializationEvent;
 import cpw.mods.fml.common.event.FMLServerStartingEvent;
 import cpw.mods.fml.common.event.FMLServerStoppedEvent;
@@ -19,12 +20,12 @@ import net.minecraftforge.common.config.Configuration;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.Logger;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.BitSet;
-import java.util.Collections;
-import java.util.List;
+import java.text.SimpleDateFormat;
+import java.util.*;
 import java.util.concurrent.locks.LockSupport;
 
 /**
@@ -39,13 +40,18 @@ public class SimplyBackup {
     protected ProcessBuilder procBuilder;
     protected BackupThread thread = new BackupThread();
     //Data-storing variables, mainly of the type loaded once, used a lot.
-    protected ArrayList<String> args = new ArrayList<String>(4);
-    protected File outputDir;
+    protected List<String> args;
+    protected int outputIndex;
+    protected File backupDir;
+    protected String worldName;
     protected int autoTicks;
+    protected boolean check;
     protected int keep;
     protected boolean backupOnExit;
+    protected boolean debug;
     //Constants
     protected static final int secsToTicks = 20;
+    protected static final String OUTPUT = "OUTPUT";
     //Constantly(?) changing ones.
     protected long nextSchedule;
     protected boolean shouldResetSave;
@@ -58,34 +64,43 @@ public class SimplyBackup {
         Configuration config = new Configuration(e.getSuggestedConfigurationFile());
         config.load();
         final String CATEGORY = "Simply Backup";
-        args.add(config.getString("program", CATEGORY, "zip", "The program to executr for compressing."));
-        args.add(config.getString("arguments", CATEGORY, "-q -r -5", "The arguments/options passed in to the program referenced by the program config"));
+        args = Arrays.asList(config.getStringList("args", CATEGORY, genDefaultArgs(), "The arguments used to launch the process for compressing.\nThe process is launched with its path set to the world folder currently getting backed up.\nAt the provided list there has to be exactly one \"OUTPUT\" element, or else this won't work.\n"));
+        outputIndex = args.indexOf(OUTPUT);
+        if (outputIndex == -1) throw new IllegalArgumentException("There is not an OUTPUT element! Please check your config: " + config.getConfigFile().getName());
         //Kind of a hacky way to get the minecraft directory. So if you, how are reading this and know a better way, then leave an issue.
-        args.add(null);//Reserve space.
-        outputDir = new File(config.getString("Backup output directory", CATEGORY, new File(e.getModConfigurationDirectory().getParent(), "backup").toString(), "The folder where to store the backups. Must be a string which can be translated into a directory by java.io.File"));
-        args.add(config.getString("filter", CATEGORY, "./", "The filter used to choose what files to backup.\nNOTE : The program is executed inside the folder of the currently playing world."));
-        autoTicks = config.getInt("autoticks", CATEGORY, secsToTicks * 60 * 60, 1, Integer.MAX_VALUE, "How many ticks to wait before we start a new automatic backup.");
+        backupDir = new File(config.getString("Backup output directory", CATEGORY, new File(e.getModConfigurationDirectory().getParent(), "backup").toString(), "The folder where to store the backups. Must be a string which can be translated into a directory by java.io.File"));
+        autoTicks = config.getInt("auto_ticks", CATEGORY, secsToTicks * 60 * 60, 1, Integer.MAX_VALUE, "How many ticks to wait before we start a new automatic backup.");
+        check = config.getBoolean("check", CATEGORY, false, "Enables extra checking before the backup, with the purpose to delete corrupted entries.");
         keep = config.getInt("keep", CATEGORY, -1, -1, Integer.MAX_VALUE, "How many backups to keep. Set to -1 to disable. Old backups created with this feature disabled will probably not count when you enable it.");
-        backupOnExit = config.getBoolean("onexit", CATEGORY, true, "Whether to start a backup on exiting a world.");
+        backupOnExit = config.getBoolean("on_exit", CATEGORY, true, "Whether to start a backup on exiting a world.");
+        debug = config.getBoolean("debug", CATEGORY, true, "Enables some extra logging, necessary for debugging.");
         if (config.hasChanged()) config.save();
         //3rd : Do final preparations for the next steps (Mainly initialize procBuilder and check the sanity of the provided data).
-        procBuilder = new ProcessBuilder(args);
+        procBuilder = new ProcessBuilder();
+        procBuilder.command(args);
         procBuilder.redirectErrorStream(true);//Potential Improvement : Handle log output from the process in a better way.
         procBuilder.redirectOutput(ProcessBuilder.Redirect.INHERIT);
-        if (outputDir.isDirectory()) {
+        if (backupDir.isDirectory()) {
             log(Level.DEBUG, "Backup directory seems okay.");
-        } else if (outputDir.mkdirs()) {
+        } else if (backupDir.mkdirs()) {
             log(Level.DEBUG, "Created backup directory.");
         } else throw new RuntimeException("Could not create backup output directory.");
+    }
+
+    private String[] genDefaultArgs() {
+        //TODO add more support for more OS.
+        return new String[] {"zip", "-q", "-r", "-5", OUTPUT, "./"};
+    }
+
+    @Mod.EventHandler
+    public void postInit(FMLPostInitializationEvent e) {
+        FMLCommonHandler.instance().bus().register(this);
     }
 
     @Mod.EventHandler
     public void serverStart(FMLServerStartingEvent e) throws IOException {
         e.registerServerCommand(new BackupCommand());
-        FMLCommonHandler.instance().bus().register(this);
-        String worldName = e.getServer().getWorldName();
-        outputDir = new File(outputDir, worldName);
-        args.set(2, outputDir.getPath());
+        worldName = e.getServer().getWorldName();
         procBuilder.directory(DimensionManager.getCurrentSaveRootDirectory().getCanonicalFile());
         resetTimers();
     }
@@ -106,7 +121,6 @@ public class SimplyBackup {
 
     @Mod.EventHandler
     public void onServerStop(FMLServerStoppedEvent e) {
-        outputDir = outputDir.getParentFile();
         if (backupOnExit) {
             log(Level.INFO, "Starting save on exit backup.");
             thread.triggerBackup(BackupTriggers.ONEXIT);
@@ -121,10 +135,10 @@ public class SimplyBackup {
         nextSchedule = getTicks() + autoTicks;
     }
 
-
     private Level CHAT_THRESHOLD = Level.INFO;
 
     protected void log(Level l, String s) {
+        //TODO debug and colors
         forgeLog.log(l, s);
         if (l.isAtLeastAsSpecificAs(CHAT_THRESHOLD)) {
             MinecraftServer server = MinecraftServer.getServer();
@@ -207,6 +221,8 @@ public class SimplyBackup {
         }
     }
 
+    private static SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd_HH:mm:ss");
+
     class BackupThread extends Thread {
         private BackupTriggers task;
 
@@ -238,16 +254,54 @@ public class SimplyBackup {
                 while (task == null) {
                     LockSupport.park();
                 }
-                //**************NYI**************
+                handleFiles();
+                Process process;
                 try {
-                    sleep(10000);
-                } catch (InterruptedException e) {
+                    process = procBuilder.start();
+                    if (process.waitFor() != 0) {
+                        log(Level.ERROR, "An error occurred with the process. Backup failed.");
+                    } else {
+                        log(Level.INFO, "Backup completed successfully.");
+                    }
+                } catch (IOException | InterruptedException e) {
                     e.printStackTrace();
                 }
-                //**************NYI**************
-                shouldResetSave = true;
+                if (task != BackupTriggers.ONEXIT) {
+                    shouldResetSave = true;
+                }
                 task = null;
             }
+        }
+
+        private void handleFiles() {
+            File list = new File(backupDir, worldName + "_list.txt");
+            LinkedList<File> previous = new LinkedList<File>();
+            if (list.exists()) {//Then load it.
+                try (BufferedReader in = new BufferedReader(new FileReader(list))) {
+                    String line;
+                    while ((line = in.readLine()) != null) {
+                        previous.addLast(new File(backupDir, line));
+                    }
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+            //TODO check and delete
+            File newFile = new File(backupDir, worldName + '-' + dateFormat.format(new Date()));
+            previous.addLast(newFile);
+            if (keep > 0) {
+                File cur;
+                while (previous.size() > keep) {
+                    cur = previous.removeFirst();
+                    if (cur.delete()) {
+                        log(Level.DEBUG, "Cleaned up: " + cur.getName());
+                    } else {
+                        log(Level.ERROR, "Could not delete: " + cur.getName());
+                    }
+                }
+            }
+            //TODO save back the list.
+            args.set(outputIndex, newFile.getPath());
         }
     }
 
