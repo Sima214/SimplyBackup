@@ -20,10 +20,7 @@ import net.minecraftforge.common.config.Configuration;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.Logger;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
-import java.io.IOException;
+import java.io.*;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.locks.LockSupport;
@@ -43,6 +40,7 @@ public class SimplyBackup {
     protected List<String> args;
     protected int outputIndex;
     protected File backupDir;
+    protected String extension;
     protected String worldName;
     protected int autoTicks;
     protected boolean check;
@@ -66,14 +64,15 @@ public class SimplyBackup {
         final String CATEGORY = "Simply Backup";
         args = Arrays.asList(config.getStringList("args", CATEGORY, genDefaultArgs(), "The arguments used to launch the process for compressing.\nThe process is launched with its path set to the world folder currently getting backed up.\nAt the provided list there has to be exactly one \"OUTPUT\" element, or else this won't work.\n"));
         outputIndex = args.indexOf(OUTPUT);
-        if (outputIndex == -1) throw new IllegalArgumentException("There is not an OUTPUT element! Please check your config: " + config.getConfigFile().getName());
-        //Kind of a hacky way to get the minecraft directory. So if you, how are reading this and know a better way, then leave an issue.
-        backupDir = new File(config.getString("Backup output directory", CATEGORY, new File(e.getModConfigurationDirectory().getParent(), "backup").toString(), "The folder where to store the backups. Must be a string which can be translated into a directory by java.io.File"));
+        if (outputIndex == -1)
+            throw new IllegalArgumentException("There is not an OUTPUT element! Please check your config: " + config.getConfigFile().getName());
+        backupDir = new File(config.getString("Backup output directory", CATEGORY, new File(".", "backup").getPath(), "The folder where to store the backups. Must be a string which can be translated into a directory by java.io.File")).getAbsoluteFile();
+        extension = config.getString("extension", CATEGORY, "zip", "The extensions the process uses.");
         autoTicks = config.getInt("auto_ticks", CATEGORY, secsToTicks * 60 * 60, 1, Integer.MAX_VALUE, "How many ticks to wait before we start a new automatic backup.");
-        check = config.getBoolean("check", CATEGORY, false, "Enables extra checking before the backup, with the purpose to delete corrupted entries.");
+        check = config.getBoolean("check", CATEGORY, false, "Enables extra checking before the backup, with the purpose of deleting corrupted backups.\nMight not be available on all system configurations.");
         keep = config.getInt("keep", CATEGORY, -1, -1, Integer.MAX_VALUE, "How many backups to keep. Set to -1 to disable. Old backups created with this feature disabled will probably not count when you enable it.");
         backupOnExit = config.getBoolean("on_exit", CATEGORY, true, "Whether to start a backup on exiting a world.");
-        debug = config.getBoolean("debug", CATEGORY, true, "Enables some extra logging, necessary for debugging.");
+        debug = config.getBoolean("debug", CATEGORY, true, "Enables some extra logging, necessary for debugging. Mostly harmless if left activated.");
         if (config.hasChanged()) config.save();
         //3rd : Do final preparations for the next steps (Mainly initialize procBuilder and check the sanity of the provided data).
         procBuilder = new ProcessBuilder();
@@ -89,7 +88,7 @@ public class SimplyBackup {
 
     private String[] genDefaultArgs() {
         //TODO add more support for more OS.
-        return new String[] {"zip", "-q", "-r", "-5", OUTPUT, "./"};
+        return new String[]{"zip", "-q", "-r", "-5", OUTPUT, "./"};
     }
 
     @Mod.EventHandler
@@ -138,16 +137,34 @@ public class SimplyBackup {
     private Level CHAT_THRESHOLD = Level.INFO;
 
     protected void log(Level l, String s) {
-        //TODO debug and colors
-        forgeLog.log(l, s);
+        if (debug) {
+            forgeLog.log(l, s);
+        }
         if (l.isAtLeastAsSpecificAs(CHAT_THRESHOLD)) {
             MinecraftServer server = MinecraftServer.getServer();
             if (server != null) {
                 ServerConfigurationManager manager = MinecraftServer.getServer().getConfigurationManager();
                 if (manager != null) {
-                    manager.sendChatMsg(new ChatComponentText(s));
+                    manager.sendChatMsg(new ChatComponentText(getColorByLevel(l.intLevel()) + s));
                 }
             }
+        }
+    }
+
+    private String getColorByLevel(int level) {
+        switch (level) {
+            case 1:
+                return "§4";
+            case 2:
+                return "§c";
+            case 3:
+                return "§5";
+            case 4:
+                return "§9";
+            case 5:
+                return "§2";
+            default:
+                return "§f";
         }
     }
 
@@ -212,11 +229,14 @@ public class SimplyBackup {
         @Override
         public void processCommand(ICommandSender user, String[] args) {
             if (args.length > 0 && args[0].equals("start")) {
-                log(Level.INFO, "Starting a manual backup...");
+                if (user != null) {
+                    log(Level.INFO, user.getCommandSenderName() + " started a manual backup...");
+                } else {
+                    log(Level.INFO, "Starting a manual backup...");
+                }
                 thread.triggerBackup(BackupTriggers.MANUAL);
             } else {
-                log(Level.INFO, (nextSchedule - getTicks()) + " ticks or " + ((nextSchedule - getTicks()) / 1200) + " minutes remaining until next scheduled backup.");
-                log(Level.INFO, "Use /backup start to start a new manual backup.");
+                log(Level.INFO, (((nextSchedule - getTicks()) / 1200) + " minutes (" + (nextSchedule - getTicks()) + " ticks) until next scheduled backup."));
             }
         }
     }
@@ -274,34 +294,56 @@ public class SimplyBackup {
         }
 
         private void handleFiles() {
-            File list = new File(backupDir, worldName + "_list.txt");
-            LinkedList<File> previous = new LinkedList<File>();
-            if (list.exists()) {//Then load it.
-                try (BufferedReader in = new BufferedReader(new FileReader(list))) {
+            File persist = new File(backupDir, worldName + "_list.txt");
+            LinkedList<File> list = new LinkedList<>();
+            if (persist.exists()) {//Then load it.
+                try (BufferedReader in = new BufferedReader(new FileReader(persist))) {
                     String line;
                     while ((line = in.readLine()) != null) {
-                        previous.addLast(new File(backupDir, line));
+                        if (!"".equals(line)) {
+                            File temp = new File(backupDir, line);
+                            if (temp.exists() && extraCheck(temp)) {
+                                list.add(temp);
+                            }
+                        }
                     }
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
             }
-            //TODO check and delete
-            File newFile = new File(backupDir, worldName + '-' + dateFormat.format(new Date()));
-            previous.addLast(newFile);
+            File newFile = new File(backupDir, worldName + '-' + dateFormat.format(new Date()) + '.' + extension);
+            list.addLast(newFile);
             if (keep > 0) {
-                File cur;
-                while (previous.size() > keep) {
-                    cur = previous.removeFirst();
+                ListIterator<File> iterator = list.listIterator();
+                while (iterator.hasNext() && list.size() > keep) {
+                    File cur = iterator.next();
                     if (cur.delete()) {
-                        log(Level.DEBUG, "Cleaned up: " + cur.getName());
+                        iterator.remove();
+                        log(Level.DEBUG, "Successfully deleted: " + cur.getName());
                     } else {
                         log(Level.ERROR, "Could not delete: " + cur.getName());
                     }
                 }
             }
-            //TODO save back the list.
+            try (BufferedWriter out = new BufferedWriter(new FileWriter(persist))) {
+                File cur;
+                while ((cur = list.removeFirst()) != null) {
+                    out.write(cur.getName());
+                    if (list.size() == 0) break;
+                    out.newLine();
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
             args.set(outputIndex, newFile.getPath());
+        }
+
+        private boolean extraCheck(File input) {
+            if (check) {
+                //TODO implement extra checking.
+                return true;
+            }
+            return true;
         }
     }
 
