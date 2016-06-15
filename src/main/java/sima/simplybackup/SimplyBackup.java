@@ -25,6 +25,8 @@ import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.locks.LockSupport;
 
+import static sima.simplybackup.SimplyBackup.OSType.*;
+
 /**
  * The java file responsible for everything
  */
@@ -35,10 +37,13 @@ public class SimplyBackup {
     //Required instances (Used mainly to do stuff than to store data)
     protected Logger forgeLog;
     protected ProcessBuilder procBuilder;
+    protected ProcessBuilder testBuilder;
     protected BackupThread thread = new BackupThread();
     //Data-storing variables, mainly of the type loaded once, used a lot.
     protected List<String> args;
+    protected List<String> testArgs;
     protected int outputIndex;
+    protected int inputIndex;
     protected File backupDir;
     protected String extension;
     protected String worldName;
@@ -50,45 +55,89 @@ public class SimplyBackup {
     //Constants
     protected static final int secsToTicks = 20;
     protected static final String OUTPUT = "OUTPUT";
+    protected static final String INPUT = "INPUT";
     //Constantly(?) changing ones.
     protected long nextSchedule;
     protected boolean shouldResetSave;
 
     @Mod.EventHandler
-    public void preInit(FMLPreInitializationEvent e) {
+    public void preInit(FMLPreInitializationEvent event) {
         //1st : Setup Logger instance
-        forgeLog = e.getModLog();
+        forgeLog = event.getModLog();
         //2nd : Load configuration while setting up the arguments for the process doing the compressing.
-        Configuration config = new Configuration(e.getSuggestedConfigurationFile());
+        Configuration config = new Configuration(event.getSuggestedConfigurationFile());
         config.load();
         final String CATEGORY = "Simply Backup";
-        args = Arrays.asList(config.getStringList("args", CATEGORY, genDefaultArgs(), "The arguments used to launch the process for compressing.\nThe process is launched with its path set to the world folder currently getting backed up.\nAt the provided list there has to be exactly one \"OUTPUT\" element, or else this won't work.\n"));
+        String[] cmd;
+        String[] testCmd = new String[]{"unzip", "-tqq", INPUT};
+        if (OS == MAC) {
+            cmd = new String[]{"zip", "-q", "-r", "-X", "-5", OUTPUT, "./"};
+        } else {
+            cmd = new String[]{"zip", "-q", "-r", "-5", OUTPUT, "./"};
+        }
+        if (OS == WINDOWS) {
+            cmd[0] = cmd[0] + ".exe";
+            testCmd[0] = testCmd[0] + ".exe";
+        }
+        args = Arrays.asList(config.getStringList("args", CATEGORY, cmd, "The arguments used to launch the process for compressing.\nThe process is launched with its path set to the world folder currently getting backed up.\nAt the provided list there has to be exactly one \"OUTPUT\" element, or else this won't work.\n"));
         outputIndex = args.indexOf(OUTPUT);
         if (outputIndex == -1)
             throw new IllegalArgumentException("There is not an OUTPUT element! Please check your config: " + config.getConfigFile().getName());
+        check = config.getBoolean("check", CATEGORY, true, "Enables extra checking before the backup, with the purpose of deleting corrupted backups.\nMight not be available on all archive formats.");
+        if (check) {
+            testArgs = Arrays.asList(config.getStringList("test_args", CATEGORY, testCmd, "The arguments used to launch the process for testing.\nThe provided list must have exactly one \"INPUT\" element, which is going to be replaced with the archive being tested."));
+            inputIndex = testArgs.indexOf(INPUT);
+            if (inputIndex == -1)
+                throw new IllegalArgumentException("There is not an INPUT element! Please check your config: " + config.getConfigFile().getName());
+        }
+        try {
+            if (OS == WINDOWS && args.get(0).equals(cmd[0]) && (Runtime.getRuntime().exec("zip.exe --version").waitFor() != 0)) {//Then the user is on Windows and still using the default options and has not manually installed zip.
+                if (config.getBoolean("providedBinaries", CATEGORY, false, "Whether to use the provided binaries under windows.\nThe binaries are extracted into the temporary folder, and then the args are changed to point to those files.")) {
+                    String binariesDir = "/binaries/";
+                    String[] binaries = new String[]{"bzip2.dll", "unzip.exe", "unzip32.dll", "zip.exe", "zip32z64.dll"};
+                    File outputDir = new File(System.getProperty("java.io.tmpdir"), "simplybackup");
+                    outputDir.mkdir();
+                    byte[] buffer = new byte[0x1000];//4k
+                    int lastRead;
+                    for (String cur : binaries) {
+                        InputStream in = getClass().getResourceAsStream(binariesDir + cur);
+                        File outFile = new File(outputDir, cur);
+                        outFile.deleteOnExit();
+                        OutputStream out = new FileOutputStream(outFile);
+                        while (true) {
+                            lastRead = in.read(buffer);
+                            if (lastRead == -1) break;
+                            out.write(buffer, 0, lastRead);
+                        }
+                    }
+                    args.set(0, new File(outputDir, "zip.exe").getAbsolutePath());
+                    testArgs.set(0, new File(outputDir, "unzip.exe").getAbsolutePath());
+                }
+            }
+        } catch (IOException | InterruptedException e) {
+            e.printStackTrace();
+        }
         backupDir = new File(config.getString("Backup output directory", CATEGORY, new File(".", "backup").getPath(), "The folder where to store the backups. Must be a string which can be translated into a directory by java.io.File")).getAbsoluteFile();
         extension = config.getString("extension", CATEGORY, "zip", "The extensions the process uses.");
         autoTicks = config.getInt("auto_ticks", CATEGORY, secsToTicks * 60 * 60, 1, Integer.MAX_VALUE, "How many ticks to wait before we start a new automatic backup.");
-        check = config.getBoolean("check", CATEGORY, false, "Enables extra checking before the backup, with the purpose of deleting corrupted backups.\nMight not be available on all system configurations.");
         keep = config.getInt("keep", CATEGORY, -1, -1, Integer.MAX_VALUE, "How many backups to keep. Set to -1 to disable. Old backups created with this feature disabled will probably not count when you enable it.");
         backupOnExit = config.getBoolean("on_exit", CATEGORY, true, "Whether to start a backup on exiting a world.");
         debug = config.getBoolean("debug", CATEGORY, true, "Enables some extra logging, necessary for debugging. Mostly harmless if left activated.");
         if (config.hasChanged()) config.save();
         //3rd : Do final preparations for the next steps (Mainly initialize procBuilder and check the sanity of the provided data).
-        procBuilder = new ProcessBuilder();
-        procBuilder.command(args);
+        procBuilder = new ProcessBuilder(args);
         procBuilder.redirectErrorStream(true);//Potential Improvement : Handle log output from the process in a better way.
         procBuilder.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+        if (check) {
+            testBuilder = new ProcessBuilder(testArgs);
+            testBuilder.redirectErrorStream(true);
+            testBuilder.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+        }
         if (backupDir.isDirectory()) {
             log(Level.DEBUG, "Backup directory seems okay.");
         } else if (backupDir.mkdirs()) {
             log(Level.DEBUG, "Created backup directory.");
         } else throw new RuntimeException("Could not create backup output directory.");
-    }
-
-    private String[] genDefaultArgs() {
-        //TODO add more support for more OS.
-        return new String[]{"zip", "-q", "-r", "-5", OUTPUT, "./"};
     }
 
     @Mod.EventHandler
@@ -254,7 +303,7 @@ public class SimplyBackup {
         }
 
         protected void triggerBackup(BackupTriggers trig) {
-            if (task != null) {
+            if (task != null || shouldResetSave) {
                 log(Level.ERROR, "Cannot have more than one backup running at once!");
                 return;
             }
@@ -340,12 +389,37 @@ public class SimplyBackup {
 
         private boolean extraCheck(File input) {
             if (check) {
-                //TODO implement extra checking.
-                return true;
+                try {
+                    testArgs.set(inputIndex, input.getAbsolutePath());
+                    Process process = testBuilder.start();
+                    if (process.waitFor() != 0) {
+                        log(Level.DEBUG, "Deleting corrupted archive: " + input.getName());
+                        input.delete();
+                        return false;
+                    }
+                } catch (IOException | InterruptedException e) {
+                    e.printStackTrace();
+                }
             }
             return true;
         }
     }
 
     enum BackupTriggers {SCHEDULED, MANUAL, ONEXIT}
+
+    enum OSType {
+        LINUX, MAC, WINDOWS, UNKNOWN;
+        static final OSType OS = getOperatingSystem();
+
+        private static OSType getOperatingSystem() {
+            String name = System.getProperty("os.name", "generic").toLowerCase(Locale.ENGLISH);
+            if (name.startsWith("windows"))
+                return WINDOWS;
+            if (name.startsWith("linux"))
+                return LINUX;
+            if (name.startsWith("mac") || name.startsWith("darwin"))
+                return MAC;
+            return UNKNOWN;
+        }
+    }
 }
