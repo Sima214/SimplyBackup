@@ -83,7 +83,7 @@ public class SimplyBackup {
         outputIndex = args.indexOf(OUTPUT);
         if (outputIndex == -1)
             throw new IllegalArgumentException("There is not an OUTPUT element! Please check your config: " + config.getConfigFile().getName());
-        check = config.getBoolean("check", CATEGORY, true, "Enables extra checking before the backup, with the purpose of deleting corrupted backups.\nMight not be available on all archive formats.");
+        check = config.getBoolean("check", CATEGORY, true, "Enables extra checking before the backup, with the purpose of deleting corrupted backups.\nMight not be available for all compressors.");
         if (check) {
             testArgs = Arrays.asList(config.getStringList("test_args", CATEGORY, testCmd, "The arguments used to launch the process for testing.\nThe provided list must have exactly one \"INPUT\" element, which is going to be replaced with the archive being tested."));
             inputIndex = testArgs.indexOf(INPUT);
@@ -119,9 +119,9 @@ public class SimplyBackup {
         }
         backupDir = new File(config.getString("Backup output directory", CATEGORY, new File(".", "backup").getPath(), "The folder where to store the backups. Must be a string which can be translated into a directory by java.io.File")).getAbsoluteFile();
         extension = config.getString("extension", CATEGORY, "zip", "The extensions the process uses.");
-        autoTicks = config.getInt("auto_ticks", CATEGORY, secsToTicks * 60 * 60, 1, Integer.MAX_VALUE, "How many ticks to wait before we start a new automatic backup.");
+        autoTicks = config.getInt("auto_ticks", CATEGORY, secsToTicks * 60 * 60, -1, Integer.MAX_VALUE, "How many ticks to wait before we start a new automatic backup. Set to -1 to disable automatic backups.");
         keep = config.getInt("keep", CATEGORY, -1, -1, Integer.MAX_VALUE, "How many backups to keep. Set to -1 to disable. Old backups created with this feature disabled will probably not count when you enable it.");
-        backupOnExit = config.getBoolean("on_exit", CATEGORY, true, "Whether to start a backup on exiting a world.");
+        backupOnExit = config.getBoolean("on_exit", CATEGORY, false, "Whether to create a backup on exiting a world.");
         debug = config.getBoolean("debug", CATEGORY, true, "Enables some extra logging, necessary for debugging. Mostly harmless if left activated.");
         if (config.hasChanged()) config.save();
         //3rd : Do final preparations for the next steps (Mainly initialize procBuilder and check the sanity of the provided data).
@@ -156,7 +156,7 @@ public class SimplyBackup {
     @SubscribeEvent
     public void onTick(TickEvent.ServerTickEvent e) {
         if (e.phase == TickEvent.Phase.START) {
-            if (getTicks() >= nextSchedule) {
+            if (autoTicks > 0 && getTicks() >= nextSchedule) {
                 log(Level.INFO, "Starting automatic backup.");
                 thread.triggerBackup(BackupTriggers.SCHEDULED);
             }
@@ -180,7 +180,8 @@ public class SimplyBackup {
     }
 
     protected void resetTimers() {
-        nextSchedule = getTicks() + autoTicks;
+        if (autoTicks > 0)
+            nextSchedule = getTicks() + autoTicks;
     }
 
     private Level CHAT_THRESHOLD = Level.INFO;
@@ -285,7 +286,11 @@ public class SimplyBackup {
                 }
                 thread.triggerBackup(BackupTriggers.MANUAL);
             } else {
-                log(Level.INFO, (((nextSchedule - getTicks()) / 1200) + " minutes (" + (nextSchedule - getTicks()) + " ticks) until next scheduled backup."));
+                if (autoTicks > 0) {
+                    log(Level.INFO, (((nextSchedule - getTicks()) / 1200) + " minutes (" + (nextSchedule - getTicks()) + " ticks) until next scheduled backup."));
+                } else {
+                    log(Level.INFO, "Automatic backups are disabled by config.");
+                }
             }
         }
     }
