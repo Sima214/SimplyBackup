@@ -30,7 +30,7 @@ import static sima.simplybackup.SimplyBackup.OSType.*;
 /**
  * The java file responsible for everything
  */
-@Mod(modid = "simplybackup", version = "1.0", name = "Simply Backup", acceptedMinecraftVersions = "1.7.10", acceptableRemoteVersions = "*")
+@Mod(modid = "simplybackup", version = "1.1", name = "Simply Backup", acceptedMinecraftVersions = "1.7.10", acceptableRemoteVersions = "*")
 public class SimplyBackup {
     @Mod.Instance("simplybackup")
     public static SimplyBackup instance;
@@ -89,33 +89,6 @@ public class SimplyBackup {
             inputIndex = testArgs.indexOf(INPUT);
             if (inputIndex == -1)
                 throw new IllegalArgumentException("There is not an INPUT element! Please check your config: " + config.getConfigFile().getName());
-        }
-        try {
-            if (OS == WINDOWS && args.get(0).equals(cmd[0]) && (Runtime.getRuntime().exec("zip.exe --version").waitFor() != 0)) {//Then the user is on Windows and still using the default options and has not manually installed zip.
-                if (config.getBoolean("providedBinaries", CATEGORY, false, "Whether to use the provided binaries under windows.\nThe binaries are extracted into the temporary folder, and then the args are changed to point to those files.")) {
-                    String binariesDir = "/binaries/";
-                    String[] binaries = new String[]{"bzip2.dll", "unzip.exe", "unzip32.dll", "zip.exe", "zip32z64.dll"};
-                    File outputDir = new File(System.getProperty("java.io.tmpdir"), "simplybackup");
-                    outputDir.mkdir();
-                    byte[] buffer = new byte[0x1000];//4k
-                    int lastRead;
-                    for (String cur : binaries) {
-                        InputStream in = getClass().getResourceAsStream(binariesDir + cur);
-                        File outFile = new File(outputDir, cur);
-                        outFile.deleteOnExit();
-                        OutputStream out = new FileOutputStream(outFile);
-                        while (true) {
-                            lastRead = in.read(buffer);
-                            if (lastRead == -1) break;
-                            out.write(buffer, 0, lastRead);
-                        }
-                    }
-                    args.set(0, new File(outputDir, "zip.exe").getAbsolutePath());
-                    testArgs.set(0, new File(outputDir, "unzip.exe").getAbsolutePath());
-                }
-            }
-        } catch (IOException | InterruptedException e) {
-            e.printStackTrace();
         }
         backupDir = new File(config.getString("Backup output directory", CATEGORY, new File(".", "backup").getPath(), "The folder where to store the backups. Must be a string which can be translated into a directory by java.io.File")).getAbsoluteFile();
         extension = config.getString("extension", CATEGORY, "zip", "The extensions the process uses.");
@@ -332,10 +305,12 @@ public class SimplyBackup {
                 Process process;
                 try {
                     process = procBuilder.start();
-                    if (process.waitFor() != 0) {
-                        log(Level.ERROR, "An error occurred with the process. Backup failed.");
-                    } else {
-                        log(Level.INFO, "Backup completed successfully.");
+                    if (task != BackupTriggers.ONEXIT) {
+                        if (process.waitFor() != 0) {
+                            log(Level.ERROR, "An error occurred with the process. Backup failed.");
+                        } else {
+                            log(Level.INFO, "Backup completed successfully.");
+                        }
                     }
                 } catch (IOException | InterruptedException e) {
                     e.printStackTrace();
