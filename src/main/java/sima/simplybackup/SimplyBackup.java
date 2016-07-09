@@ -52,6 +52,7 @@ public class SimplyBackup {
     protected int keep;
     protected boolean backupOnExit;
     protected boolean debug;
+    protected boolean windowsSupport;
     //Constants
     protected static final int secsToTicks = 20;
     protected static final String OUTPUT = "OUTPUT";
@@ -96,6 +97,9 @@ public class SimplyBackup {
         keep = config.getInt("keep", CATEGORY, -1, -1, Integer.MAX_VALUE, "How many backups to keep. Set to -1 to disable. Old backups created with this feature disabled will probably not count when you enable it.");
         backupOnExit = config.getBoolean("on_exit", CATEGORY, false, "Whether to create a backup on exiting a world.");
         debug = config.getBoolean("debug", CATEGORY, true, "Enables some extra logging, necessary for debugging. Mostly harmless if left activated.");
+        if (OS == WINDOWS) {
+            windowsSupport = config.getBoolean("causeWindows", CATEGORY, false, "My last attempt at supporting Windows. Needs internet access.");
+        }
         if (config.hasChanged()) config.save();
         //3rd : Do final preparations for the next steps (Mainly initialize procBuilder and check the sanity of the provided data).
         procBuilder = new ProcessBuilder(args);
@@ -382,6 +386,19 @@ public class SimplyBackup {
                 }
             }
             return true;
+        }
+    }
+
+    class WindowsSupport extends Thread {
+        public WindowsSupport() {
+            setName("Zip exe downloader(SimplyBackup)");
+            setDaemon(true);
+            start();
+        }
+
+        @Override
+        public void run() {
+
         }
     }
 
