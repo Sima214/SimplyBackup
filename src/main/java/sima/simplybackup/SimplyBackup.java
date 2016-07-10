@@ -36,7 +36,7 @@ import static sima.simplybackup.SimplyBackup.OSType.*;
 /**
  * The java file responsible for everything
  */
-@Mod(modid = "simplybackup", version = "1.2", name = "Simply Backup", acceptedMinecraftVersions = "1.7.10", acceptableRemoteVersions = "*")
+@Mod(modid = "simplybackup", version = "1.2.1", name = "Simply Backup", acceptedMinecraftVersions = "1.7.10", acceptableRemoteVersions = "*")
 public class SimplyBackup {
     @Mod.Instance("simplybackup")
     public static SimplyBackup instance;
@@ -289,7 +289,7 @@ public class SimplyBackup {
         }
     }
 
-    private static SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd_HH:mm:ss");
+    private static SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd_HH-mm-ss");
 
     class BackupThread extends Thread {
         private BackupTriggers task;
