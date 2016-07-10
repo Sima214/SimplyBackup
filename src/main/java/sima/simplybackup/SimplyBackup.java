@@ -17,10 +17,16 @@ import net.minecraft.world.MinecraftException;
 import net.minecraft.world.WorldServer;
 import net.minecraftforge.common.DimensionManager;
 import net.minecraftforge.common.config.Configuration;
+import org.apache.commons.codec.binary.Hex;
+import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.Logger;
 
 import java.io.*;
+import java.net.MalformedURLException;
+import java.net.URL;
+import java.net.URLConnection;
+import java.security.DigestOutputStream;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.locks.LockSupport;
@@ -30,7 +36,7 @@ import static sima.simplybackup.SimplyBackup.OSType.*;
 /**
  * The java file responsible for everything
  */
-@Mod(modid = "simplybackup", version = "1.1", name = "Simply Backup", acceptedMinecraftVersions = "1.7.10", acceptableRemoteVersions = "*")
+@Mod(modid = "simplybackup", version = "1.2", name = "Simply Backup", acceptedMinecraftVersions = "1.7.10", acceptableRemoteVersions = "*")
 public class SimplyBackup {
     @Mod.Instance("simplybackup")
     public static SimplyBackup instance;
@@ -52,7 +58,7 @@ public class SimplyBackup {
     protected int keep;
     protected boolean backupOnExit;
     protected boolean debug;
-    protected boolean windowsSupport;
+    protected WindowsSupport windowsSupport;
     //Constants
     protected static final int secsToTicks = 20;
     protected static final String OUTPUT = "OUTPUT";
@@ -97,8 +103,8 @@ public class SimplyBackup {
         keep = config.getInt("keep", CATEGORY, -1, -1, Integer.MAX_VALUE, "How many backups to keep. Set to -1 to disable. Old backups created with this feature disabled will probably not count when you enable it.");
         backupOnExit = config.getBoolean("on_exit", CATEGORY, false, "Whether to create a backup on exiting a world.");
         debug = config.getBoolean("debug", CATEGORY, true, "Enables some extra logging, necessary for debugging. Mostly harmless if left activated.");
-        if (OS == WINDOWS) {
-            windowsSupport = config.getBoolean("causeWindows", CATEGORY, false, "My last attempt at supporting Windows. Needs internet access.");
+        if (OS == WINDOWS && config.getBoolean("causeWindows", CATEGORY, true, "My last attempt at supporting Windows. Needs internet access. Downloads the required zip executables from the project's GitHub repository.")) {
+            windowsSupport = new WindowsSupport();
         }
         if (config.hasChanged()) config.save();
         //3rd : Do final preparations for the next steps (Mainly initialize procBuilder and check the sanity of the provided data).
@@ -118,8 +124,19 @@ public class SimplyBackup {
     }
 
     @Mod.EventHandler
-    public void postInit(FMLPostInitializationEvent e) {
+    public void postInit(FMLPostInitializationEvent ev) {
         FMLCommonHandler.instance().bus().register(this);
+        if (windowsSupport != null) {
+            while (windowsSupport.getState() != Thread.State.TERMINATED) {
+                log(Level.INFO, "Waiting for " + windowsSupport.getName() + " thread to terminate.");
+                try {
+                    windowsSupport.join();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+            windowsSupport = null;
+        }
     }
 
     @Mod.EventHandler
@@ -390,15 +407,102 @@ public class SimplyBackup {
     }
 
     class WindowsSupport extends Thread {
+        private final File cacheFolder = new File(".", "simplybackup_cache");
+
         public WindowsSupport() {
             setName("Zip exe downloader(SimplyBackup)");
             setDaemon(true);
+            if (!cacheFolder.isDirectory()) {
+                cacheFolder.mkdirs();
+            }
             start();
         }
 
         @Override
         public void run() {
-
+            //First step: try and download info file.
+            BufferedReader infoReader = null;
+            boolean streamOpened = false;
+            boolean internetConnection = false;
+            File infoCacheFile = new File(cacheFolder, "simplybackup_zip.info");
+            try {
+                URL info = new URL("https://raw.githubusercontent.com/Sima214/SimplyBackup/master/causeWindows/simplybackup_zip.info");
+                URLConnection connection = info.openConnection();
+                connection.setConnectTimeout(1000);
+                infoReader = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                infoReader.mark(8192);
+                internetConnection = true;
+                streamOpened = true;
+                BufferedWriter writer = new BufferedWriter(new FileWriter(infoCacheFile));
+                char[] buffer = new char[1024];
+                int lastRead;
+                while ((lastRead = infoReader.read(buffer)) != -1) {
+                    writer.write(buffer, 0, lastRead);
+                }
+                writer.close();
+            } catch (MalformedURLException e) {
+                log(Level.DEBUG, "Could not create url.");
+                e.printStackTrace();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            //Else try and load  the info file from the cache folder.
+            try {
+                if (!streamOpened) {
+                    infoReader = new BufferedReader(new FileReader(infoCacheFile));
+                }
+            } catch (FileNotFoundException e) {
+                e.printStackTrace();
+                log(Level.FATAL, "Could not load: " + infoCacheFile.getName());
+                return;
+            }
+            //Now download the executables, if necessary.
+            try {
+                if (internetConnection) {
+                    infoReader.reset();
+                }
+                String line;
+                String[] lineTokens;
+                while ((line = infoReader.readLine()) != null && line.length() > 0) {
+                    lineTokens = line.split(" ");
+                    File curFile = new File(cacheFolder, lineTokens[0]);
+                    if (curFile.isFile()) {
+                        //Check if hash of cached file matches the one provided from the info file.
+                        FileInputStream inputStream = new FileInputStream(curFile);
+                        if (DigestUtils.md5Hex(inputStream).equalsIgnoreCase(lineTokens[1])) {
+                            inputStream.close();
+                            log(Level.INFO, "Using " + lineTokens[0] + " from cache.");
+                            continue;
+                            //If the check succeeds, then just move on the next file.
+                        }
+                        inputStream.close();
+                    }
+                    //When we reach this point, we need to download from the link and check the hashes at the same time.
+                    URL curUrl = new URL(lineTokens[2]);
+                    URLConnection connection = curUrl.openConnection();
+                    connection.setConnectTimeout(1000);
+                    BufferedInputStream source = new BufferedInputStream(connection.getInputStream());
+                    DigestOutputStream output = new DigestOutputStream(new FileOutputStream(curFile), DigestUtils.getMd5Digest());
+                    byte[] buffer = new byte[1024];
+                    int lastRead;
+                    while ((lastRead = source.read(buffer)) != -1) {
+                        output.write(buffer, 0, lastRead);
+                    }
+                    if (Hex.encodeHexString(output.getMessageDigest().digest()).equalsIgnoreCase(lineTokens[1])) {
+                        log(Level.DEBUG, "Downloaded successfully: " + lineTokens[0]);
+                    } else {
+                        log(Level.ERROR, "Hashes do not match for: " + lineTokens[0]);
+                        return;
+                    }
+                    source.close();
+                    output.close();
+                }
+                infoReader.close();
+                args.set(0, new File(cacheFolder, args.get(0)).getCanonicalPath());
+                testArgs.set(0, new File(cacheFolder, testArgs.get(0)).getCanonicalPath());
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
         }
     }
 
