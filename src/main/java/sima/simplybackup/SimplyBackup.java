@@ -3,14 +3,15 @@ package sima.simplybackup;
 import net.minecraft.command.CommandBase;
 import net.minecraft.command.ICommandSender;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.management.ServerConfigurationManager;
-import net.minecraft.util.BlockPos;
-import net.minecraft.util.ChatComponentText;
+import net.minecraft.server.management.PlayerList;
+import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.text.TextComponentString;
 import net.minecraft.world.MinecraftException;
 import net.minecraft.world.WorldServer;
 import net.minecraftforge.common.DimensionManager;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.common.config.Configuration;
+import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.event.FMLPostInitializationEvent;
 import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
@@ -23,6 +24,7 @@ import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.Logger;
 
+import javax.annotation.Nullable;
 import java.io.*;
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -37,10 +39,10 @@ import static sima.simplybackup.SimplyBackup.OSType.*;
 /**
  * The java file responsible for everything
  */
-@Mod(modid = SimplyBackup.MODID, version = SimplyBackup.VERSION, name = SimplyBackup.NAME, acceptedMinecraftVersions = "1.8.9", acceptableRemoteVersions = "*")
+@Mod(modid = SimplyBackup.MODID, version = SimplyBackup.VERSION, name = SimplyBackup.NAME, acceptedMinecraftVersions = "1.9.4", acceptableRemoteVersions = "*")
 public class SimplyBackup {
     public static final String MODID = "simplybackup";
-    public static final String VERSION = "1.3.1";
+    public static final String VERSION = "1.4";
     public static final String NAME = "Simply Backup";
     @Mod.Instance(MODID)
     public static SimplyBackup instance;
@@ -173,7 +175,11 @@ public class SimplyBackup {
     }
 
     protected long getTicks() {
-        return MinecraftServer.getServer().getTickCounter();
+        return getServer().getTickCounter();
+    }
+
+    protected MinecraftServer getServer() {
+        return FMLCommonHandler.instance().getMinecraftServerInstance();
     }
 
     protected void resetTimers() {
@@ -188,12 +194,10 @@ public class SimplyBackup {
             forgeLog.log(l, s);
         }
         if (l.isAtLeastAsSpecificAs(CHAT_THRESHOLD)) {
-            MinecraftServer server = MinecraftServer.getServer();
+            MinecraftServer server = getServer();
             if (server != null) {
-                ServerConfigurationManager manager = MinecraftServer.getServer().getConfigurationManager();
-                if (manager != null) {
-                    manager.sendChatMsg(new ChatComponentText(getColorByLevel(l.intLevel()) + s));
-                }
+                PlayerList playerList = server.getPlayerList();
+                playerList.sendChatMsg(new TextComponentString(getColorByLevel(l.intLevel()) + s));
             }
         }
     }
@@ -220,19 +224,16 @@ public class SimplyBackup {
     protected void saveOffAndAll() {
         log(Level.INFO, "Saving to disk.");
         state.clear();
-        MinecraftServer server = MinecraftServer.getServer();
-        if (server.getConfigurationManager() != null) {
-            server.getConfigurationManager().saveAllPlayerData();
-        }
+        MinecraftServer server = getServer();
+        server.getPlayerList().saveAllPlayerData();
         WorldServer[] worldServers = server.worldServers;
         for (int i = 0; i < worldServers.length; i++) {
             WorldServer cur = worldServers[i];
             if (cur != null) {
-                //Set save off
+                //Save state
                 if (cur.disableLevelSaving) {
                     state.set(i);
-                } else {
-                    cur.disableLevelSaving = true;
+                    cur.disableLevelSaving = false;
                 }
                 //Actually save
                 try {
@@ -242,6 +243,8 @@ public class SimplyBackup {
                     log(Level.ERROR, "Error occurred while saving chunks. Continuing...");
                     e.printStackTrace();
                 }
+                //Set save off
+                cur.disableLevelSaving = true;
 
             }
         }
@@ -249,7 +252,7 @@ public class SimplyBackup {
 
     protected void saveReset() {
         log(Level.DEBUG, "Resetting state.");
-        MinecraftServer server = MinecraftServer.getServer();
+        MinecraftServer server = getServer();
         WorldServer[] worldServers = server.worldServers;
         for (int i = 0; i < worldServers.length; i++) {
             WorldServer cur = worldServers[i];
@@ -269,12 +272,12 @@ public class SimplyBackup {
         }
 
         @Override
-        public List<String> addTabCompletionOptions(ICommandSender sender, String[] args, BlockPos pos) {
+        public List<String> getTabCompletionOptions(MinecraftServer server, ICommandSender sender, String[] args, @Nullable BlockPos pos) {
             return Collections.singletonList("start");
         }
 
         @Override
-        public void processCommand(ICommandSender user, String[] args) {
+        public void execute(MinecraftServer server, ICommandSender user, String[] args) {
             if (args.length > 0 && args[0].equals("start")) {
                 if (user != null) {
                     log(Level.INFO, user.getName() + " started a manual backup...");
