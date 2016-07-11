@@ -37,9 +37,12 @@ import static sima.simplybackup.SimplyBackup.OSType.*;
 /**
  * The java file responsible for everything
  */
-@Mod(modid = "simplybackup", version = "1.3", name = "Simply Backup", acceptedMinecraftVersions = "1.7.10", acceptableRemoteVersions = "*")
+@Mod(modid = SimplyBackup.MODID, version = SimplyBackup.VERSION, name = SimplyBackup.NAME, acceptedMinecraftVersions = "1.8.9", acceptableRemoteVersions = "*")
 public class SimplyBackup {
-    @Mod.Instance("simplybackup")
+    public static final String MODID = "simplybackup";
+    public static final String VERSION = "1.3.1";
+    public static final String NAME = "Simply Backup";
+    @Mod.Instance(MODID)
     public static SimplyBackup instance;
     //Required instances (Used mainly to do stuff than to store data)
     protected Logger forgeLog;
@@ -75,7 +78,6 @@ public class SimplyBackup {
         //2nd : Load configuration while setting up the arguments for the process doing the compressing.
         Configuration config = new Configuration(event.getSuggestedConfigurationFile());
         config.load();
-        final String CATEGORY = "Simply Backup";
         String[] cmd;
         String[] testCmd = new String[]{"unzip", "-tqq", INPUT};
         if (OS == MAC) {
@@ -87,24 +89,24 @@ public class SimplyBackup {
             cmd[0] = cmd[0] + ".exe";
             testCmd[0] = testCmd[0] + ".exe";
         }
-        args = Arrays.asList(config.getStringList("args", CATEGORY, cmd, "The arguments used to launch the process for compressing.\nThe process is launched with its path set to the world folder currently getting backed up.\nAt the provided list there has to be exactly one \"OUTPUT\" element, or else this won't work.\n"));
+        args = Arrays.asList(config.getStringList("args", NAME, cmd, "The arguments used to launch the process for compressing.\nThe process is launched with its path set to the world folder currently getting backed up.\nAt the provided list there has to be exactly one \"OUTPUT\" element, or else this won't work.\n"));
         outputIndex = args.indexOf(OUTPUT);
         if (outputIndex == -1)
             throw new IllegalArgumentException("There is not an OUTPUT element! Please check your config: " + config.getConfigFile().getName());
-        check = config.getBoolean("check", CATEGORY, true, "Enables extra checking before the backup, with the purpose of deleting corrupted backups.\nMight not be available for all compressors.");
+        check = config.getBoolean("check", NAME, true, "Enables extra checking before the backup, with the purpose of deleting corrupted backups.\nMight not be available for all compressors.");
         if (check) {
-            testArgs = Arrays.asList(config.getStringList("test_args", CATEGORY, testCmd, "The arguments used to launch the process for testing.\nThe provided list must have exactly one \"INPUT\" element, which is going to be replaced with the archive being tested."));
+            testArgs = Arrays.asList(config.getStringList("test_args", NAME, testCmd, "The arguments used to launch the process for testing.\nThe provided list must have exactly one \"INPUT\" element, which is going to be replaced with the archive being tested."));
             inputIndex = testArgs.indexOf(INPUT);
             if (inputIndex == -1)
                 throw new IllegalArgumentException("There is not an INPUT element! Please check your config: " + config.getConfigFile().getName());
         }
-        backupDir = new File(config.getString("Backup output directory", CATEGORY, new File(".", "backup").getPath(), "The folder where to store the backups. Must be a string which can be translated into a directory by java.io.File")).getAbsoluteFile();
-        extension = config.getString("extension", CATEGORY, "zip", "The extensions the process uses.");
-        autoTicks = config.getInt("auto_ticks", CATEGORY, secsToTicks * 60 * 60, -1, Integer.MAX_VALUE, "How many ticks to wait before we start a new automatic backup. Set to -1 to disable automatic backups.");
-        keep = config.getInt("keep", CATEGORY, -1, -1, Integer.MAX_VALUE, "How many backups to keep. Set to -1 to disable. Old backups created with this feature disabled will probably not count when you enable it.");
-        backupOnExit = config.getBoolean("on_exit", CATEGORY, false, "Whether to create a backup on exiting a world.");
-        debug = config.getBoolean("debug", CATEGORY, true, "Enables some extra logging, necessary for debugging. Mostly harmless if left activated.");
-        if (OS == WINDOWS && config.getBoolean("causeWindows", CATEGORY, true, "My last attempt at supporting Windows. Needs internet access. Downloads the required zip executables from the project's GitHub repository.")) {
+        backupDir = new File(config.getString("Backup output directory", NAME, new File(".", "backup").getPath(), "The folder where to store the backups. Must be a string which can be translated into a directory by java.io.File")).getAbsoluteFile();
+        extension = config.getString("extension", NAME, "zip", "The extensions the process uses.");
+        autoTicks = config.getInt("auto_ticks", NAME, secsToTicks * 60 * 60, -1, Integer.MAX_VALUE, "How many ticks to wait before we start a new automatic backup. Set to -1 to disable automatic backups.");
+        keep = config.getInt("keep", NAME, -1, -1, Integer.MAX_VALUE, "How many backups to keep. Set to -1 to disable. Old backups created with this feature disabled will probably not count when you enable it.");
+        backupOnExit = config.getBoolean("on_exit", NAME, false, "Whether to create a backup on exiting a world.");
+        debug = config.getBoolean("debug", NAME, true, "Enables some extra logging, necessary for debugging. Mostly harmless if left activated.");
+        if (OS == WINDOWS && config.getBoolean("causeWindows", NAME, true, "My last attempt at supporting Windows. Needs internet access. Downloads the required zip executables from the project's GitHub repository.")) {
             windowsSupport = new WindowsSupport();
         }
         if (config.hasChanged()) config.save();
