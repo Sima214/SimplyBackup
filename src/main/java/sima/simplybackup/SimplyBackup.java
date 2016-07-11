@@ -1,22 +1,23 @@
 package sima.simplybackup;
 
-import cpw.mods.fml.common.FMLCommonHandler;
-import cpw.mods.fml.common.Mod;
-import cpw.mods.fml.common.event.FMLPostInitializationEvent;
-import cpw.mods.fml.common.event.FMLPreInitializationEvent;
-import cpw.mods.fml.common.event.FMLServerStartingEvent;
-import cpw.mods.fml.common.event.FMLServerStoppedEvent;
-import cpw.mods.fml.common.eventhandler.SubscribeEvent;
-import cpw.mods.fml.common.gameevent.TickEvent;
 import net.minecraft.command.CommandBase;
 import net.minecraft.command.ICommandSender;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.management.ServerConfigurationManager;
+import net.minecraft.util.BlockPos;
 import net.minecraft.util.ChatComponentText;
 import net.minecraft.world.MinecraftException;
 import net.minecraft.world.WorldServer;
 import net.minecraftforge.common.DimensionManager;
+import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.common.config.Configuration;
+import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.common.event.FMLPostInitializationEvent;
+import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
+import net.minecraftforge.fml.common.event.FMLServerStartingEvent;
+import net.minecraftforge.fml.common.event.FMLServerStoppedEvent;
+import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
+import net.minecraftforge.fml.common.gameevent.TickEvent;
 import org.apache.commons.codec.binary.Hex;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.logging.log4j.Level;
@@ -36,7 +37,7 @@ import static sima.simplybackup.SimplyBackup.OSType.*;
 /**
  * The java file responsible for everything
  */
-@Mod(modid = "simplybackup", version = "1.2.1", name = "Simply Backup", acceptedMinecraftVersions = "1.7.10", acceptableRemoteVersions = "*")
+@Mod(modid = "simplybackup", version = "1.3", name = "Simply Backup", acceptedMinecraftVersions = "1.7.10", acceptableRemoteVersions = "*")
 public class SimplyBackup {
     @Mod.Instance("simplybackup")
     public static SimplyBackup instance;
@@ -125,7 +126,7 @@ public class SimplyBackup {
 
     @Mod.EventHandler
     public void postInit(FMLPostInitializationEvent ev) {
-        FMLCommonHandler.instance().bus().register(this);
+        MinecraftForge.EVENT_BUS.register(this);
         if (windowsSupport != null) {
             while (windowsSupport.getState() != Thread.State.TERMINATED) {
                 log(Level.INFO, "Waiting for " + windowsSupport.getName() + " thread to terminate.");
@@ -226,10 +227,10 @@ public class SimplyBackup {
             WorldServer cur = worldServers[i];
             if (cur != null) {
                 //Set save off
-                if (cur.levelSaving) {
+                if (cur.disableLevelSaving) {
                     state.set(i);
                 } else {
-                    cur.levelSaving = true;
+                    cur.disableLevelSaving = true;
                 }
                 //Actually save
                 try {
@@ -250,7 +251,7 @@ public class SimplyBackup {
         WorldServer[] worldServers = server.worldServers;
         for (int i = 0; i < worldServers.length; i++) {
             WorldServer cur = worldServers[i];
-            cur.levelSaving = state.get(i);
+            cur.disableLevelSaving = state.get(i);
         }
     }
 
@@ -266,7 +267,7 @@ public class SimplyBackup {
         }
 
         @Override
-        public List addTabCompletionOptions(ICommandSender user, String[] args) {
+        public List<String> addTabCompletionOptions(ICommandSender sender, String[] args, BlockPos pos) {
             return Collections.singletonList("start");
         }
 
@@ -274,7 +275,7 @@ public class SimplyBackup {
         public void processCommand(ICommandSender user, String[] args) {
             if (args.length > 0 && args[0].equals("start")) {
                 if (user != null) {
-                    log(Level.INFO, user.getCommandSenderName() + " started a manual backup...");
+                    log(Level.INFO, user.getName() + " started a manual backup...");
                 } else {
                     log(Level.INFO, "Starting a manual backup...");
                 }
